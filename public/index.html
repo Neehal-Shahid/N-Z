@@ -125,6 +125,7 @@ details.gd ol,details.gd ul{padding-left:1.3em;margin:6px 0}details.gd li{margin
   <input id="q" type="search" placeholder="Search chats" aria-label="Search chats">
   <div id="list"></div>
   <button id="setbtn">Settings</button>
+  <div id="syn" style="font-size:12px;opacity:.6;padding:0 10px;min-height:16px"></div>
 </aside>
 <main>
   <header>
@@ -139,14 +140,14 @@ details.gd ol,details.gd ul{padding-left:1.3em;margin:6px 0}details.gd li{margin
       <textarea id="in" rows="1" placeholder="Message GLM…"></textarea>
       <button id="send" aria-label="Send"></button>
     </div>
-    <div class="foot">Enter to send · Shift+Enter for a new line · Chats are saved only in this browser</div>
+    <div class="foot">Enter to send · Shift+Enter for a new line · Chats are saved in this browser and synced if your host supports it</div>
   </div>
 </main>
 
 <div id="modal">
   <div class="card" role="dialog" aria-modal="true">
     <h2 id="mt">Settings</h2>
-    <p id="mp">Your key and chats stay in this browser's localStorage.</p>
+    <p id="mp">Your key stays in this browser. Chats sync only if your host has sync set up.</p>
     <details class="gd" id="gd"><summary>Getting started: how to get a free API key</summary>
       <h3>Get your key (about 1 minute)</h3>
       <ol>
@@ -160,7 +161,7 @@ details.gd ol,details.gd ul{padding-left:1.3em;margin:6px 0}details.gd li{margin
       <ul>
         <li><b>Choose a model</b> from the dropdown at the top right of the chat. GLM-4.7-Flash is the newest, but it sometimes shows a <b>429</b> "busy" error. For easy tasks and everyday conversation, use <b>GLM-4.5-Flash</b>.</li>
         <li><b>Thinking mode</b> (the checkbox below): the model reasons step by step before it answers. It is slower but better for coding, maths and tricky questions. Turn it off for quick, everyday chat.</li>
-        <li>Your key and chats stay in this browser only.</li>
+        <li>Your key stays in this browser. On a host with sync set up, your chats follow you to any device once you paste the same key there.</li>
       </ul>
     </details>
     <div><label for="k">API key</label><input id="k" type="password" placeholder="Paste your Z.ai API key" autocomplete="off">
@@ -198,9 +199,9 @@ function renderModel(){
 }
 let S;
 try{S=JSON.parse(localStorage.getItem(LS))}catch{}
-S=Object.assign({chats:[],active:null,key:'',model:'glm-4.7-flash',think:true,sys:'',temp:1,maxTok:8192},S||{});
+S=Object.assign({chats:[],active:null,key:'',model:'glm-4.7-flash',think:true,sys:'',temp:1,maxTok:8192,del:{}},S||{});
 let busy=false,ctrl=null;
-const save=()=>{try{localStorage.setItem(LS,JSON.stringify(S))}catch(e){alert('Could not save to localStorage: '+e.message)}};
+const save=q=>{try{localStorage.setItem(LS,JSON.stringify(S))}catch(e){alert('Could not save to localStorage: '+e.message)}if(!q)schedSync()};
 const cur=()=>S.chats.find(c=>c.id===S.active);
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -260,7 +261,7 @@ function renderMsgs(){
   $('#title').textContent=c?c.title:'New chat';
   renderModel();
   if(!c||!c.msgs.length){
-    el.innerHTML=`<div id="empty"><div class="tile">${ICON_CHAT}</div><h1>Start a conversation</h1><p>Chat with GLM for free. Your key and chats stay on this device, and requests go only to Z.AI.</p><div class="chips">${['Write a Python web scraper','Explain async/await in JavaScript','Build a React todo app','Help me debug my code'].map(t=>`<button data-chip="${esc(t)}">${esc(t)}</button>`).join('')}</div></div>`;
+    el.innerHTML=`<div id="empty"><div class="tile">${ICON_CHAT}</div><h1>Start a conversation</h1><p>Chat with GLM for free. Your key stays in this browser, and requests go only to Z.AI.</p><div class="chips">${['Write a Python web scraper','Explain async/await in JavaScript','Build a React todo app','Help me debug my code'].map(t=>`<button data-chip="${esc(t)}">${esc(t)}</button>`).join('')}</div></div>`;
     renderList();return;
   }
   el.innerHTML=c.msgs.map((m,i)=>{
@@ -280,6 +281,40 @@ function newChat(){
   const c=cur();if(c&&!c.msgs.length){closeSide();return}
   const n={id:uid(),title:'New chat',msgs:[],ts:Date.now()};
   S.chats.push(n);S.active=n.id;save();renderMsgs();closeSide();$('#in').focus();
+}
+/* ---------- cross-device sync (needs the /sync backend; silently off otherwise) ---------- */
+let synT=null,synOff=!location.protocol.startsWith('http');
+const synMsg=t=>{const e=$('#syn');if(e)e.textContent=t};
+function schedSync(){if(synOff)return;clearTimeout(synT);synT=setTimeout(function t(){busy?synT=setTimeout(t,3000):syncNow()},2500)}
+function mergeIn(r){
+  const del=Object.assign({},S.del);
+  for(const [id,t] of Object.entries(r.del||{}))del[id]=Math.max(del[id]||0,t);
+  const m=new Map();
+  for(const c of [...S.chats,...(r.chats||[]).filter(c=>c&&c.id&&Array.isArray(c.msgs))]){const o=m.get(c.id);if(!o||(c.ts||0)>(o.ts||0))m.set(c.id,c)}
+  S.del=del;
+  S.chats=[...m.values()].filter(c=>!(del[c.id]&&del[c.id]>=(c.ts||0))).sort((a,b)=>a.id<b.id?-1:1);
+}
+async function syncNow(){
+  if(synOff||!S.key||busy)return;
+  const H={Authorization:'Bearer '+S.key};
+  try{
+    synMsg('Syncing…');
+    const g=await fetch('/sync',{headers:H});
+    if([404,405,501].includes(g.status)){synOff=true;synMsg('');return}
+    if(!g.ok)throw new Error(g.status);
+    const r=await g.json(),before=JSON.stringify([S.chats,S.del]);
+    mergeIn(r);
+    if(JSON.stringify([S.chats,S.del])!==before){
+      if(S.active&&!cur())S.active=null;
+      if(!S.active&&S.chats.length)S.active=S.chats.slice().sort((a,b)=>b.ts-a.ts)[0].id;
+      save(true);renderMsgs();
+    }
+    if(JSON.stringify([S.chats,S.del])!==JSON.stringify([r.chats||[],r.del||{}])){
+      const p=await fetch('/sync',{method:'PUT',headers:{...H,'Content-Type':'application/json'},body:JSON.stringify({chats:S.chats,del:S.del})});
+      if(!p.ok)throw new Error(p.status);
+    }
+    synMsg('Synced ✓');
+  }catch(e){synMsg('Sync failed, will retry');schedSync()}
 }
 async function send(text){
   text=(text||'').trim();if(!text||busy)return;
@@ -354,7 +389,7 @@ function autosize(){const t=$('#in');t.style.height='auto';t.style.height=Math.m
 function openModal(force){
   $('#k').value=S.key;$('#m').value=S.model;$('#th').checked=S.think;$('#sy').value=S.sys;$('#tp').value=S.temp;$('#mx').value=S.maxTok;
   $('#mt').textContent=force?'Connect your Z.ai API key':'Settings';
-  $('#mp').textContent=force?'Paste your key once. It is saved in this browser only and sent only to api.z.ai.':'Your key and chats stay in this browser\'s localStorage.';
+  $('#mp').textContent=force?'Paste your key once. It is saved in this browser only and sent only to api.z.ai.':'Your key stays in this browser. Chats sync only if your host has sync set up.';
   $('#cancel').style.display=$('#wipe').style.display=force?'none':'';
   $('#gd').open=!!force;$('#k').type='password';$('#kshow').textContent='Show';
   $('#modal').classList.add('on');$('#modal').dataset.force=force?1:'';
@@ -369,7 +404,7 @@ $('#save').onclick=()=>{
   $('#modal').classList.remove('on');renderMsgs();$('#in').focus();
 };
 $('#cancel').onclick=()=>$('#modal').classList.remove('on');
-$('#wipe').onclick=()=>{if(confirm('Delete all saved chats? This cannot be undone.')){S.chats=[];S.active=null;save();$('#modal').classList.remove('on');renderMsgs()}};
+$('#wipe').onclick=()=>{if(confirm('Delete all saved chats? If sync is on, they are deleted on your other devices too. This cannot be undone.')){S.chats.forEach(c=>S.del[c.id]=Date.now());S.chats=[];S.active=null;save();$('#modal').classList.remove('on');renderMsgs()}};
 $('#k').onkeydown=e=>{if(e.key==='Enter')$('#save').click()};
 $('#setbtn').onclick=()=>{closeSide();openModal(false)};
 $('#newchat').onclick=newChat;
@@ -379,14 +414,14 @@ $('#in').oninput=autosize;
 $('#in').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send($('#in').value)}};
 $('#list').onclick=e=>{
   const d=e.target.closest('[data-del]');
-  if(d){if(busy)return;S.chats=S.chats.filter(c=>c.id!==d.dataset.del);if(S.active===d.dataset.del)S.active=S.chats.length?S.chats.slice().sort((a,b)=>b.ts-a.ts)[0].id:null;save();renderMsgs();return}
+  if(d){if(busy)return;S.del[d.dataset.del]=Date.now();S.chats=S.chats.filter(c=>c.id!==d.dataset.del);if(S.active===d.dataset.del)S.active=S.chats.length?S.chats.slice().sort((a,b)=>b.ts-a.ts)[0].id:null;save();renderMsgs();return}
   const i=e.target.closest('.ci');if(i&&!busy){S.active=i.dataset.id;save();renderMsgs();toBottom();closeSide()}
 };
 $('#list').onkeydown=e=>{if(e.key==='Enter'&&e.target.classList.contains('ci'))e.target.click()};
 $('#msgs').onclick=e=>{
   const t=e.target,c=cur();
   if(t.dataset.chip)return send(t.dataset.chip);
-  if(t.dataset.edit&&!busy){const i=+t.dataset.edit;$('#in').value=c.msgs[i].content;c.msgs=c.msgs.slice(0,i);save();renderMsgs();autosize();$('#in').focus();return}
+  if(t.dataset.edit&&!busy){const i=+t.dataset.edit;$('#in').value=c.msgs[i].content;c.msgs=c.msgs.slice(0,i);c.ts=Date.now();save();renderMsgs();autosize();$('#in').focus();return}
   if(t.hasAttribute('data-copy')){navigator.clipboard.writeText(t.closest('.code').querySelector('code').textContent);t.textContent='Copied';setTimeout(()=>t.textContent='Copy',1200)}
   if(t.dataset.cm){navigator.clipboard.writeText(c.msgs[t.dataset.cm].content);t.textContent='Copied';setTimeout(()=>t.textContent='Copy',1200)}
   if(t.hasAttribute('data-regen')&&!busy){c.msgs.pop();save();run()}
@@ -394,7 +429,7 @@ $('#msgs').onclick=e=>{
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#modal').classList.contains('on')&&!$('#modal').dataset.force)$('#cancel').click()});
 
 $('#q').oninput=renderList;
-$('#title').onclick=()=>{const c=cur();if(!c||busy)return;const n=prompt('Rename chat',c.title);if(n&&n.trim()){c.title=n.trim().slice(0,80);save();renderMsgs()}};
+$('#title').onclick=()=>{const c=cur();if(!c||busy)return;const n=prompt('Rename chat',c.title);if(n&&n.trim()){c.title=n.trim().slice(0,80);c.ts=Date.now();save();renderMsgs()}};
 $('#exp').onclick=()=>{
   const b=new Blob([JSON.stringify({app:'glmchat',chats:S.chats},null,1)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='glm-chats-'+new Date().toISOString().slice(0,10)+'.json';
@@ -422,6 +457,8 @@ if(S.active&&!cur())S.active=null;
 if(!S.active&&S.chats.length)S.active=S.chats.slice().sort((a,b)=>b.ts-a.ts)[0].id;
 setBusy(false);renderMsgs();toBottom();
 if(!S.key)openModal(true);else $('#in').focus();
+if(S.key)syncNow();
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncNow()});
 </script>
 </body>
 </html>
