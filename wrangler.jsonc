@@ -3,5 +3,5 @@
   "main": "src/worker.js",
   "compatibility_date": "2025-09-01",
   "assets": { "directory": "./public", "binding": "ASSETS" },
-  "kv_namespaces": [{ "binding": "CHATS", "id": "PASTE_KV_ID_HERE" }]
+  "kv_namespaces": [{ "binding": "CHATS", "id": "e8dc10bd98844ef1b830b5632d30a7b2" }]
 }
