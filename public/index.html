@@ -116,6 +116,20 @@ details.gd ol,details.gd ul{padding-left:1.3em;margin:6px 0}details.gd li{margin
 #menu{display:block}.chips{grid-template-columns:1fr}#empty h1{font-size:24px}
 .ci button{opacity:.8}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+.ci button.more{opacity:.3}
+.ci:hover button.more,.ci:focus-within button.more{opacity:.8}
+.ci .ico{font-size:11px;opacity:.5;flex-shrink:0;margin-right:2px}
+.ci.hid{opacity:.4;font-style:italic}
+.ci.hid:hover{opacity:.65}
+.cmenu{position:fixed;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:5px;min-width:155px;z-index:15;box-shadow:0 8px 28px rgba(0,0,0,.45)}
+.cmenu button{width:100%;text-align:left;padding:7px 10px;border-radius:7px;font-size:13px;white-space:nowrap}
+.cmenu button:hover{background:var(--side2)}
+.cmenu .cdel{color:var(--err)}
+#shidden{font-size:12px;padding:4px 10px;opacity:.55;display:flex;align-items:center;gap:6px;cursor:pointer}
+#shidden input{accent-color:var(--ac)}
+.cmodal{position:fixed;inset:0;background:rgba(5,12,18,.65);display:none;place-items:center;padding:16px;z-index:30}
+.cmodal.on{display:grid}
+.cmodal .card{max-width:380px}
 </style>
 </head>
 <body>
@@ -125,6 +139,7 @@ details.gd ol,details.gd ul{padding-left:1.3em;margin:6px 0}details.gd li{margin
   <input id="q" type="search" placeholder="Search chats" aria-label="Search chats">
   <div id="list"></div>
   <button id="setbtn">Settings</button>
+  <label id="shidden"><input type="checkbox" id="shcb"> Show hidden chats</label>
   <div id="syn" style="font-size:12px;opacity:.6;padding:0 10px;min-height:16px"></div>
 </aside>
 <main>
@@ -174,6 +189,29 @@ details.gd ol,details.gd ul{padding-left:1.3em;margin:6px 0}details.gd li{margin
     <div class="btns">
       <button class="btn d" id="wipe">Delete all chats</button>
       <span style="display:flex;gap:8px"><button class="btn" id="cancel">Cancel</button><button class="btn p" id="save">Save</button></span>
+    </div>
+  </div>
+</div>
+
+<div id="dmodal" class="cmodal">
+  <div class="card" role="dialog" aria-modal="true">
+    <h2 style="color:var(--err)">Delete chat</h2>
+    <p id="dmodal-msg">Are you sure you want to delete this chat? This cannot be undone.</p>
+    <div class="btns" style="margin-top:8px">
+      <button class="btn" id="dmodal-no">Cancel</button>
+      <button class="btn d" id="dmodal-yes">Delete</button>
+    </div>
+  </div>
+</div>
+
+<div id="pmodal" class="cmodal">
+  <div class="card" role="dialog" aria-modal="true">
+    <h2 id="pmodal-title">Enter password</h2>
+    <p id="pmodal-msg"></p>
+    <div><label for="pmodal-pw">Password</label><input id="pmodal-pw" type="password" autocomplete="off"></div>
+    <div class="btns" style="margin-top:4px">
+      <button class="btn" id="pmodal-no">Cancel</button>
+      <button class="btn p" id="pmodal-ok">OK</button>
     </div>
   </div>
 </div>
@@ -254,7 +292,14 @@ function bodyHTML(m,streaming){
 }
 function renderList(){
   const q=($('#q').value||'').trim().toLowerCase();
-  $('#list').innerHTML=S.chats.slice().sort((a,b)=>b.ts-a.ts).filter(c=>!q||c.title.toLowerCase().includes(q)||c.msgs.some(m=>(m.content||'').toLowerCase().includes(q))).map(c=>`<div class="ci ${c.id===S.active?'on':''}" data-id="${c.id}" tabindex="0"><span>${esc(c.title)}</span><button data-del="${c.id}" aria-label="Delete chat">×</button></div>`).join('')||'<div style="padding:8px 10px;font-size:13px;opacity:.6">No chats yet</div>';
+  const showH=$('#shcb')&&$('#shcb').checked;
+  $('#list').innerHTML=S.chats.slice().sort((a,b)=>b.ts-a.ts).filter(c=>{
+    if(c.hidden&&!showH)return false;
+    return !q||c.title.toLowerCase().includes(q)||c.msgs.some(m=>(m.content||'').toLowerCase().includes(q));
+  }).map(c=>{
+    const icons=(c.lock?'<span class="ico">🔒</span>':'')+(c.hidden?'<span class="ico" title="Hidden">🙈</span>':'');
+    return `<div class="ci ${c.id===S.active?'on':''} ${c.hidden?'hid':''}" data-id="${c.id}" tabindex="0">${icons}<span>${esc(c.title)}</span><button class="more" data-more="${c.id}" aria-label="Chat options">⋮</button></div>`;
+  }).join('')||'<div style="padding:8px 10px;font-size:13px;opacity:.6">No chats yet</div>';
 }
 function renderMsgs(){
   const c=cur(),el=$('#msgs');
@@ -274,6 +319,40 @@ function renderMsgs(){
 const nearBottom=()=>{const s=$('#scroll');return s.scrollHeight-s.scrollTop-s.clientHeight<140};
 const toBottom=()=>{const s=$('#scroll');s.style.scrollBehavior='auto';s.scrollTop=s.scrollHeight;s.style.scrollBehavior=''};
 function setBusy(b){busy=b;$('#send').innerHTML=b?ICON_STOP:ICON_SEND;$('#send').disabled=false;$('#send').setAttribute('aria-label',b?'Stop':'Send')}
+
+/* ---------- context menu & chat actions ---------- */
+let openMenuEl=null;
+function closeMenu(){if(openMenuEl){openMenuEl.remove();openMenuEl=null}}
+document.addEventListener('click',e=>{if(openMenuEl&&!openMenuEl.contains(e.target)&&!e.target.hasAttribute('data-more'))closeMenu()},true);
+function showMenu(id,btn){
+  if(openMenuEl&&openMenuEl._forId===id){closeMenu();return}
+  closeMenu();const c=S.chats.find(x=>x.id===id);if(!c)return;
+  const rect=btn.getBoundingClientRect();
+  const m=document.createElement('div');m.className='cmenu';m._forId=id;
+  const spaceBelow=window.innerHeight-rect.bottom;
+  if(spaceBelow<180)m.style.bottom=(window.innerHeight-rect.top+4)+'px';
+  else m.style.top=rect.bottom+4+'px';
+  m.style.right=(window.innerWidth-rect.right)+'px';
+  m.innerHTML=`<button data-act="rename">✏️ Rename</button><button data-act="${c.hidden?'unhide':'hide'}">${c.hidden?'👁️ Unhide':'🙈 Hide'}</button><button data-act="${c.lock?'unlock':'lock'}">${c.lock?'🔓 Remove password':'🔒 Set password'}</button><button data-act="delete" class="cdel">🗑️ Delete</button>`;
+  m.onclick=e=>{const a=e.target.closest('[data-act]');if(!a)return;e.stopPropagation();closeMenu();chatAction(id,a.dataset.act)};
+  document.body.appendChild(m);openMenuEl=m;
+}
+let pendingDel=null;
+function chatAction(id,act){
+  const c=S.chats.find(x=>x.id===id);if(!c)return;
+  if(act==='rename'){const n=prompt('Rename chat',c.title);if(n&&n.trim()){c.title=n.trim().slice(0,80);c.ts=Date.now();save();renderMsgs()}}
+  if(act==='hide'){c.hidden=true;if(S.active===id)S.active=null;save();renderMsgs()}
+  if(act==='unhide'){delete c.hidden;save();renderMsgs()}
+  if(act==='lock'){openPModal('Set password','Choose a password for \u201c'+c.title+'\u201d',pw=>{c.lock=pw;save();renderList()})}
+  if(act==='unlock'){openPModal('Remove password','Enter current password to unlock \u201c'+c.title+'\u201d',pw=>{if(pw===c.lock){delete c.lock;save();renderList()}else{alert('Wrong password.')}})}
+  if(act==='delete'){pendingDel=id;$('#dmodal-msg').textContent='Delete \u201c'+c.title+'\u201d? This cannot be undone.';$('#dmodal').classList.add('on')}
+}
+let pCb=null;
+function openPModal(title,msg,cb){
+  $('#pmodal-title').textContent=title;$('#pmodal-msg').textContent=msg;
+  $('#pmodal-pw').value='';pCb=cb;$('#pmodal').classList.add('on');
+  setTimeout(()=>$('#pmodal-pw').focus(),30);
+}
 
 /* ---------- chat logic ---------- */
 function newChat(){
@@ -404,18 +483,25 @@ $('#save').onclick=()=>{
   $('#modal').classList.remove('on');renderMsgs();$('#in').focus();
 };
 $('#cancel').onclick=()=>$('#modal').classList.remove('on');
-$('#wipe').onclick=()=>{if(confirm('Delete all saved chats? If sync is on, they are deleted on your other devices too. This cannot be undone.')){S.chats.forEach(c=>S.del[c.id]=Date.now());S.chats=[];S.active=null;save();$('#modal').classList.remove('on');renderMsgs()}};
+$('#wipe').onclick=()=>{pendingDel='__all__';$('#dmodal-msg').textContent='Delete ALL saved chats? If sync is on, they are deleted on your other devices too. This cannot be undone.';$('#dmodal').classList.add('on')};
 $('#k').onkeydown=e=>{if(e.key==='Enter')$('#save').click()};
 $('#setbtn').onclick=()=>{closeSide();openModal(false)};
 $('#newchat').onclick=newChat;
 $('#menu').onclick=()=>$('#side').classList.add('open');
 $('#send').onclick=()=>busy?ctrl&&(ctrl.stop=true,ctrl.rd&&ctrl.rd.cancel()):send($('#in').value);
 $('#in').oninput=autosize;
-$('#in').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send($('#in').value)}};
+const isMobile=window.matchMedia('(pointer:coarse)').matches;
+if(isMobile)$('.foot').textContent='Tap send button to send \u00b7 Chats are saved in this browser and synced if your host supports it';
+$('#in').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&!isMobile){e.preventDefault();send($('#in').value)}};
 $('#list').onclick=e=>{
-  const d=e.target.closest('[data-del]');
-  if(d){if(busy)return;S.del[d.dataset.del]=Date.now();S.chats=S.chats.filter(c=>c.id!==d.dataset.del);if(S.active===d.dataset.del)S.active=S.chats.length?S.chats.slice().sort((a,b)=>b.ts-a.ts)[0].id:null;save();renderMsgs();return}
-  const i=e.target.closest('.ci');if(i&&!busy){S.active=i.dataset.id;save();renderMsgs();toBottom();closeSide()}
+  const mb=e.target.closest('[data-more]');
+  if(mb){e.stopPropagation();showMenu(mb.dataset.more,mb);return}
+  const i=e.target.closest('.ci');
+  if(i&&!busy){
+    const c=S.chats.find(x=>x.id===i.dataset.id);
+    if(c&&c.lock){openPModal('Locked chat','Enter password to open \u201c'+c.title+'\u201d',pw=>{if(pw===c.lock){S.active=c.id;save();renderMsgs();toBottom();closeSide()}else alert('Wrong password.')});return}
+    S.active=i.dataset.id;save();renderMsgs();toBottom();closeSide();
+  }
 };
 $('#list').onkeydown=e=>{if(e.key==='Enter'&&e.target.classList.contains('ci'))e.target.click()};
 $('#msgs').onclick=e=>{
@@ -426,9 +512,20 @@ $('#msgs').onclick=e=>{
   if(t.dataset.cm){navigator.clipboard.writeText(c.msgs[t.dataset.cm].content);t.textContent='Copied';setTimeout(()=>t.textContent='Copy',1200)}
   if(t.hasAttribute('data-regen')&&!busy){c.msgs.pop();save();run()}
 };
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#modal').classList.contains('on')&&!$('#modal').dataset.force)$('#cancel').click()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){if($('#dmodal').classList.contains('on')){$('#dmodal-no').click();return}if($('#pmodal').classList.contains('on')){$('#pmodal-no').click();return}if($('#modal').classList.contains('on')&&!$('#modal').dataset.force)$('#cancel').click()}});
 
 $('#q').oninput=renderList;
+$('#shcb').onchange=renderList;
+$('#dmodal-no').onclick=()=>{pendingDel=null;$('#dmodal').classList.remove('on')};
+$('#dmodal-yes').onclick=()=>{
+  if(!pendingDel){$('#dmodal').classList.remove('on');return}
+  if(pendingDel==='__all__'){S.chats.forEach(c=>S.del[c.id]=Date.now());S.chats=[];S.active=null}
+  else{S.del[pendingDel]=Date.now();S.chats=S.chats.filter(c=>c.id!==pendingDel);if(S.active===pendingDel)S.active=S.chats.length?S.chats.slice().sort((a,b)=>b.ts-a.ts)[0].id:null}
+  pendingDel=null;save();$('#dmodal').classList.remove('on');$('#modal').classList.remove('on');renderMsgs();
+};
+$('#pmodal-no').onclick=()=>{pCb=null;$('#pmodal').classList.remove('on')};
+$('#pmodal-ok').onclick=()=>{const pw=$('#pmodal-pw').value;if(!pw){$('#pmodal-pw').focus();return}$('#pmodal').classList.remove('on');if(pCb)pCb(pw);pCb=null};
+$('#pmodal-pw').onkeydown=e=>{if(e.key==='Enter')$('#pmodal-ok').click()};
 $('#title').onclick=()=>{const c=cur();if(!c||busy)return;const n=prompt('Rename chat',c.title);if(n&&n.trim()){c.title=n.trim().slice(0,80);c.ts=Date.now();save();renderMsgs()}};
 $('#exp').onclick=()=>{
   const b=new Blob([JSON.stringify({app:'glmchat',chats:S.chats},null,1)],{type:'application/json'});
@@ -453,8 +550,7 @@ $('#kshow').onclick=()=>{const k=$('#k'),h=k.type==='password';k.type=h?'text':'
 $('#kcopy').onclick=()=>{navigator.clipboard.writeText($('#k').value);$('#kcopy').textContent='Copied';setTimeout(()=>$('#kcopy').textContent='Copy',1200)};
 $('#msel').onchange=e=>{S.model=e.target.value;save();renderModel()};
 $('#gear').onclick=()=>openModal(false);
-if(S.active&&!cur())S.active=null;
-if(!S.active&&S.chats.length)S.active=S.chats.slice().sort((a,b)=>b.ts-a.ts)[0].id;
+S.active=null;
 setBusy(false);renderMsgs();toBottom();
 if(!S.key)openModal(true);else $('#in').focus();
 if(S.key)syncNow();
