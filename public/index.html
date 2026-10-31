@@ -77,7 +77,11 @@ details.think div{margin-top:6px;white-space:pre-wrap;max-height:260px;overflow:
 .chips{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:640px;margin:0 auto}
 .chips button{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 20px;text-align:left;font-size:15.5px;color:var(--tx)}
 .chips button:hover{border-color:var(--ac)}
-#comp{padding:16px 18px 12px;border-top:1px solid var(--line);background:var(--bg)}
+#comp{position:relative;padding:16px 18px 12px;border-top:1px solid var(--line);background:var(--bg)}
+#tobot{position:absolute;left:50%;bottom:calc(100% + 14px);transform:translateX(-50%) translateY(8px);width:38px;height:38px;border-radius:50%;background:var(--panel);border:1px solid var(--line);color:var(--tx);box-shadow:0 4px 14px rgba(0,0,0,.4),0 1px 3px rgba(0,0,0,.2);display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s ease,transform .2s ease,background .15s,border-color .15s,color .15s;z-index:5;cursor:pointer;padding:0}
+#tobot.visible{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
+#tobot:hover{background:var(--side2);color:#fff;border-color:var(--ac)}
+#tobot.visible:active{transform:translateX(-50%) scale(0.92)}
 .box{max-width:780px;margin:0 auto;display:flex;align-items:flex-end;gap:10px}
 .box textarea{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:13px 18px}.box textarea:focus{border-color:var(--ac)}
 textarea{flex:1;border:0;outline:0;resize:none;background:none;font:inherit;color:inherit;max-height:200px;padding:6px 0;line-height:1.5}
@@ -114,6 +118,7 @@ details.gd ol,details.gd ul{padding-left:1.3em;margin:6px 0}details.gd li{margin
 #side{position:fixed;inset:0 auto 0 0;z-index:10;transform:translateX(-100%)}
 #side.open{transform:none}
 #menu{display:block}.chips{grid-template-columns:1fr}#empty h1{font-size:24px}
+#tobot{width:40px;height:40px;bottom:calc(100% + 12px)}
 .ci button{opacity:.8}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 .ci button.more{opacity:.3}
@@ -151,6 +156,7 @@ details.gd ol,details.gd ul{padding-left:1.3em;margin:6px 0}details.gd li{margin
   </header>
   <div id="scroll"><div id="msgs"></div></div>
   <div id="comp">
+    <button id="tobot" aria-label="Scroll to bottom" title="Scroll to bottom"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg></button>
     <div class="box">
       <textarea id="in" rows="1" placeholder="Message GLM…"></textarea>
       <button id="send" aria-label="Send"></button>
@@ -307,17 +313,18 @@ function renderMsgs(){
   renderModel();
   if(!c||!c.msgs.length){
     el.innerHTML=`<div id="empty"><div class="tile">${ICON_CHAT}</div><h1>Start a conversation</h1><p>Chat with GLM for free. Your key stays in this browser, and requests go only to Z.AI.</p><div class="chips">${['Write a Python web scraper','Explain async/await in JavaScript','Build a React todo app','Help me debug my code'].map(t=>`<button data-chip="${esc(t)}">${esc(t)}</button>`).join('')}</div></div>`;
-    renderList();return;
+    renderList();updateScrollBtn();return;
   }
   el.innerHTML=c.msgs.map((m,i)=>{
     const last=i===c.msgs.length-1,st=busy&&last&&m.role==='assistant';
     if(m.role==='user')return `<div class="msg user"><button class="ed" data-edit="${i}" aria-label="Edit message" title="Edit and resend (removes later messages)">✎</button><div class="body">${bodyHTML(m)}</div></div>`;
     return `<div class="msg bot"><div class="av">${ICON_SPARK}</div><div class="body"><div class="md">${bodyHTML(m,st)}</div>${st?'':`<div class="acts"><button data-cm="${i}">Copy</button>${last?'<button data-regen>Regenerate</button>':''}</div>`}</div></div>`;
   }).join('');
-  renderList();
+  renderList();updateScrollBtn();
 }
 const nearBottom=()=>{const s=$('#scroll');return s.scrollHeight-s.scrollTop-s.clientHeight<140};
-const toBottom=()=>{const s=$('#scroll');s.style.scrollBehavior='auto';s.scrollTop=s.scrollHeight;s.style.scrollBehavior=''};
+const updateScrollBtn=()=>{const s=$('#scroll'),btn=$('#tobot');if(!s||!btn)return;const far=s.scrollHeight-s.scrollTop-s.clientHeight>120;btn.classList.toggle('visible',far)};
+const toBottom=()=>{const s=$('#scroll');s.style.scrollBehavior='auto';s.scrollTop=s.scrollHeight;s.style.scrollBehavior='';updateScrollBtn()};
 function setBusy(b){busy=b;$('#send').innerHTML=b?ICON_STOP:ICON_SEND;$('#send').disabled=false;$('#send').setAttribute('aria-label',b?'Stop':'Send')}
 
 /* ---------- context menu & chat actions ---------- */
@@ -416,7 +423,7 @@ function repCut(t){
 async function run(){
   const c=cur(),a={role:'assistant',content:'',reasoning:''};
   c.msgs.push(a);setBusy(true);ctrl={stop:false,rd:null};renderMsgs();toBottom();
-  const paint=()=>{const el=$('#msgs .msg.bot:last-child .md');if(!el)return;const nb=nearBottom();el.innerHTML=bodyHTML(a,true);if(nb)toBottom()};
+  const paint=()=>{const el=$('#msgs .msg.bot:last-child .md');if(!el)return;const nb=nearBottom();el.innerHTML=bodyHTML(a,true);if(nb)toBottom();else updateScrollBtn()};
   try{
     const doFetch=()=>go({method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.key},
@@ -490,6 +497,9 @@ $('#newchat').onclick=newChat;
 $('#menu').onclick=()=>$('#side').classList.add('open');
 $('#send').onclick=()=>busy?ctrl&&(ctrl.stop=true,ctrl.rd&&ctrl.rd.cancel()):send($('#in').value);
 $('#in').oninput=autosize;
+$('#scroll').addEventListener('scroll',updateScrollBtn,{passive:true});
+window.addEventListener('resize',updateScrollBtn,{passive:true});
+$('#tobot').onclick=()=>{const s=$('#scroll');s.scrollTo({top:s.scrollHeight,behavior:'smooth'})};
 const isMobile=window.matchMedia('(pointer:coarse)').matches;
 if(isMobile)$('.foot').textContent='Tap send button to send \u00b7 Chats are saved in this browser and synced if your host supports it';
 $('#in').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&!isMobile){e.preventDefault();send($('#in').value)}};
